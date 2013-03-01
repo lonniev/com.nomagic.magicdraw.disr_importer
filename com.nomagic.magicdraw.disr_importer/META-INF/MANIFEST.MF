@@ -1,0 +1,11 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: com.nomagic.magicdraw.disr_importer
+Bundle-SymbolicName: com.nomagic.magicdraw.disr_importer
+Bundle-Version: 1.0.0.qualifier
+Bundle-RequiredExecutionEnvironment: JavaSE-1.7
+Require-Bundle: com.sodius.mdw.core,
+ org.eclipse.emf.ecore,
+ com.sodius.mdw.metamodel.excel,
+ com.sodius.mdw.metamodel.uml21
+

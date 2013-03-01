@@ -1,0 +1,218 @@
+package com.nomagic.magicdraw.disr_importer;
+
+import java.text.*;
+
+public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml21 ) {
+
+	public rule import()
+	{
+		@importFromExcel(disr_excel, md_model);
+	}
+	
+	// lookup a Stereotype instance from a given model using the String name of that instance
+	private rule getStereoByName(name : String, within_model : uml21) : uml21.Stereotype {
+		
+		if ((null == name) || (name.isEmpty()))
+		{
+			return null;
+		}
+		
+		return within_model.getInstances("Stereotype").detect("name", name);
+	}
+
+	// lookup a Column index from a given excel using the String name of that column	
+	private rule columnIdByName(name : String, excel_model : excel) : Integer {
+		
+		if ((null == name) || (name.isEmpty()))
+		{
+			return -1;
+		}
+		
+		var firstRow : excel.Row = excel_model.getInstances("Row").first();
+		var soughtColumn : excel.Column = firstRow.getCells().detect("value", name).column;
+		
+		return soughtColumn.getColumnIndex();
+		
+	}
+	
+	// add an ISO8601DateTime when applicable
+	private rule createIsoDateTime(name : String, cellDate : String, dst_model : uml21) : uml21.LiteralString
+	{
+		if ((null == cellDate) || cellDate.isEmpty())
+		{
+			return null;
+		}
+
+		// format the date into a quasi ISO8601 date
+		var formatter : SimpleDateFormat = "yyyy-MM-dd";
+ 		var convertedDate : java.util.Date = cellDate; // formatter.parse(cellDate);
+
+		// create a new LiteralString that will become the ISO8601DateTime instance
+		var isoDate : uml21.LiteralString = dst_model.create("LiteralString");
+				
+		isoDate.name = name;
+ 		isoDate.value = convertedDate;
+ 				
+ 		return isoDate;
+	}
+	
+	public rule importFromExcel(src_model : excel, dst_model : uml21) {
+		
+		var magicDrawProfile : uml21.Package = dst_model.getInstances("Profile").detect("name", "MagicDraw Profile");
+		
+		if (null == magicDrawProfile)
+		{
+			System.out.println("Missing 'MagicDraw Profile' in Destination Model " + dst_model);
+			return;
+		}
+		
+		var updmProfile : uml21.Package = dst_model.getInstances("Profile").detect("name", "UPDM Profile");
+		
+		if (null == updmProfile)
+		{
+			System.out.println("Missing 'UPDM Profile' in Destination Model " + dst_model);
+			return;
+		}
+		
+		var updmExtraProfile : uml21.Package = dst_model.getInstances("Profile").detect("name", "Extra stereotypes");
+
+		if (null == updmExtraProfile)
+		{
+			System.out.println("Missing 'Extra stereotypes' Profile in Destination Model " + dst_model);
+			return;
+		}
+		
+		var libraryStereo = @getStereoByName("elementsLibrary", dst_model);
+		
+		if (null == libraryStereo)
+		{
+			System.out.println("Missing <<elementsLibrary>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+		
+		var updmElementStereo = @getStereoByName("UPDMElement", dst_model);
+		
+		if (null == updmElementStereo)
+		{
+			System.out.println("Missing <<UPDMElement>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+		
+		var standardStereo = @getStereoByName("Standard", dst_model);
+		
+		if (null == standardStereo)
+		{
+			System.out.println("Missing <<Standard>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+
+		var techStandardStereo = @getStereoByName("TechnicalStandard", dst_model);
+		
+		if (null == techStandardStereo)
+		{
+			System.out.println("Missing <<TechnicalStandard>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+
+		var timelineStereo = @getStereoByName("TimeLine", dst_model);
+		
+		if (null == timelineStereo)
+		{
+			System.out.println("Missing <<TimeLine>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+		
+		var isoDateStereo = @getStereoByName("ISO8601DateTime", dst_model);
+		
+		if (null == isoDateStereo)
+		{
+			System.out.println("Missing <<ISO8601DateTime>> Stereotype in Destination Model " + dst_model);
+			return;
+		}
+				
+		var rootPackage : uml21.Package = dst_model.getInstances("Model").detect("name", "Model");
+		
+		var disr_lib = rootPackage.createNestedPackage("DISR Library");
+			
+		disr_lib.applyProfile(magicDrawProfile);
+		disr_lib.applyProfile(updmProfile);
+		disr_lib.applyProfile(updmExtraProfile);
+		
+		var standardsPackage : uml21.Package = disr_lib.createNestedPackage("Standards");
+		var datesPackage : uml21.Package = standardsPackage.createNestedPackage("Dates");
+		
+		// disr_lib.applyStereotype(libraryStereo);
+		// standardsPackage.applyStereotype(libraryStereo);
+		// datesPackage.applyStereotype(libraryStereo);
+		
+		datesPackage.applyStereotype(timelineStereo);		
+		
+		
+		// foreach row of the provided excel file except for the very first row
+		foreach (row : excel.Row in src_model.getInstances("Row").subList(1, src_model.getInstances("Row").size())) {
+			
+			cellList = row.getCells();
+			
+			if (cellList.size() > 1) {
+				
+				var techStd : uml21.Class = dst_model.create("Class");
+				
+				techStd.name = cellList[@columnIdByName("Standard Title", src_model)].value;
+				
+				disr_lib.packagedElement.add(techStd);
+				
+				// apply the <<Standard>> and the <<TechnicalStandard>> stereotypes to the new Class
+				techStd.applyStereotype(standardStereo);
+				techStd.applyStereotype(techStandardStereo);
+							
+				techStd.setValue(standardStereo, "shortName",
+					cellList[@columnIdByName("Standard Identifier", src_model)].value);
+				
+				techStd.setValue(standardStereo, "InformationTechnologyStandardCategory",
+					[cellList[@columnIdByName("Primary Reviewing TWG", src_model)].value, cellList[@columnIdByName("TWG Secondary Interests", src_model)].value]);
+					
+				techStd.setValue(standardStereo, "currentStatus",
+					cellList[@columnIdByName("DoD Status", src_model)].value);
+					
+				// if there is a DoD Mandated Date then
+				var cellDate : String = cellList[@columnIdByName("Date DoD Mandated", src_model)].value;
+				
+				var isoDate = @createIsoDateTime("DoD Mandate Date for " + techStd.name, cellDate, dst_model);
+				
+				if (null != isoDate)
+				{
+     				datesPackage.packagedElement.add(isoDate);
+     				
+     				isoDate.applyStereotype(isoDateStereo);
+					
+					techStd.setValue(standardStereo, "mandatedDate",
+						isoDate);
+				}
+						
+				cellDate = 	cellList[@columnIdByName("", src_model)].value;
+				
+				if (null != cellDate)
+				{
+     				datesPackage.packagedElement.add(isoDate);
+     				
+     				isoDate.applyStereotype(isoDateStereo);
+					
+					techStd.setValue(standardStereo, "retiredDate",
+						isoDate);
+				}
+						
+				techStd.setValue(standardStereo, "version",
+					cellList[@columnIdByName("Standard Title", src_model)].value);
+				
+				var comment : uml21.Comment = techStd.createOwnedComment();
+				
+				comment.setBody("ABSTRACT:\n" + cellList[@columnIdByName("Abstract", src_model)].value + "\n\nAPPLICABILITY:\n" + cellList[@columnIdByName("Applicability", src_model)].value);
+				
+				techStd.setValue(standardStereo, "URL/URI",
+					cellList[@columnIdByName("URL to Access", src_model)].value);
+				
+			}
+		}		
+	}
+
+}

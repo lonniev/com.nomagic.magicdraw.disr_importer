@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profile metamodel="uml21">
+  <element name="TechnicalStandard" baseClass="com.sodius.mdw.metamodel.uml21.Class">
+    <stereotype name="TechnicalStandard"/>
+  </element>
+</profile>
