@@ -1,6 +1,7 @@
 package com.nomagic.magicdraw.disr_importer;
 
 import java.text.*;
+import org.eclipse.emf.ecore.EObject;
 
 public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml21 ) {
 
@@ -23,16 +24,22 @@ public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml
 	// lookup a Column index from a given excel using the String name of that column	
 	private rule columnIdByName(name : String, excel_model : excel) : Integer {
 		
-		if ((null == name) || (name.isEmpty()))
+		if ((null != name) && (!name.isEmpty()))
 		{
-			return -1;
+			var firstRow : excel.Row = excel_model.getInstances("Row").first();
+			
+			if (null != firstRow)
+			{
+				var soughtColumn : excel.Column = firstRow.getCells().detect("value", name).column;
+				
+				if (null != soughtColumn)
+				{
+					return soughtColumn.getColumnIndex();
+				}
+			}
 		}
-		
-		var firstRow : excel.Row = excel_model.getInstances("Row").first();
-		var soughtColumn : excel.Column = firstRow.getCells().detect("value", name).column;
-		
-		return soughtColumn.getColumnIndex();
-		
+				
+		return -1;
 	}
 	
 	// add an ISO8601DateTime when applicable
@@ -49,13 +56,91 @@ public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml
 
 		// create a new LiteralString that will become the ISO8601DateTime instance
 		var isoDate : uml21.LiteralString = dst_model.create("LiteralString");
-				
-		isoDate.name = name;
- 		isoDate.value = convertedDate;
- 				
+
+		if (null != isoDate)
+		{				
+			isoDate.name = name;
+ 			isoDate.value = convertedDate;
+		}
+			
  		return isoDate;
 	}
 	
+	private rule cellValueAsString( cellList : com.sodius.mdw.corext.model.emf.MDWEObjectContainmentWithInverseEList, field : String, src_model : excel ) : String
+	{
+		var value : String = "";
+		var columnId : Integer = @columnIdByName(field, src_model);
+		
+		if (0 <= columnId)
+		{
+			value = cellList[columnId].value;
+			
+			if ((null == value) || (value.isEmpty()))
+			{
+				value = "";
+			}
+		}
+			
+		return value;
+	}
+	
+	private rule applyAndGetStereoApplication(element : uml21.Element, stereo : uml21.Stereotype) : EObject
+	{
+		var stereoApplication : EObject = null;
+		
+		if (null != element)
+		{
+			// get the application if it is already applied
+			stereoApplication = element.getStereotypeApplication(stereo);
+			
+			if (null == stereoApplication)
+			{
+				// apply the stereotype first and then get the application
+	 			element.applyStereotype(stereo);
+	 			
+	 			stereoApplication = element.getStereotypeApplication(stereo);
+			}
+		}
+	 				
+ 		return stereoApplication;
+	}
+
+	private rule setDynamicObjectStringFeatureByName(dynObject : EObject, feature : String, value : String)
+	{
+		if (null != dynObject)
+		{
+			var idFeature : org.eclipse.emf.ecore.EStructuralFeature =
+				dynObject.eClass().getEStructuralFeature(feature);
+		
+			dynObject.eSet(idFeature, value);
+		}
+	}		
+		
+	private rule setDynamicObjectStringListFeatureByName(dynObject : EObject, feature : String, value : com.sodius.mdw.core.model.DefaultMDWList)
+	{
+		if (null != dynObject)
+		{
+			var idFeature : org.eclipse.emf.ecore.EStructuralFeature =
+				dynObject.eClass().getEStructuralFeature(feature);
+		
+			// shed any entries in the list that are empty strings
+			value.removeAll([""]);
+			
+			dynObject.eSet(idFeature, value);
+		}
+	}		
+		
+	private rule setDynamicObjectFeatureByName(dynObject : EObject, feature : String, value : EObject)
+	{
+		if (null != dynObject)
+		{
+			var idFeature : org.eclipse.emf.ecore.EStructuralFeature =
+				dynObject.eClass().getEStructuralFeature(feature);
+		
+			dynObject.eSet(idFeature, value);
+		}
+	}		
+		
 	public rule importFromExcel(src_model : excel, dst_model : uml21) {
 		
 		var magicDrawProfile : uml21.Package = dst_model.getInstances("Profile").detect("name", "MagicDraw Profile");
@@ -90,22 +175,6 @@ public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml
 			return;
 		}
 		
-		var updmElementStereo = @getStereoByName("UPDMElement", dst_model);
-		
-		if (null == updmElementStereo)
-		{
-			System.out.println("Missing <<UPDMElement>> Stereotype in Destination Model " + dst_model);
-			return;
-		}
-		
-		var standardStereo = @getStereoByName("Standard", dst_model);
-		
-		if (null == standardStereo)
-		{
-			System.out.println("Missing <<Standard>> Stereotype in Destination Model " + dst_model);
-			return;
-		}
-
 		var techStandardStereo = @getStereoByName("TechnicalStandard", dst_model);
 		
 		if (null == techStandardStereo)
@@ -129,88 +198,149 @@ public ruleset DISRimportTransformer(in disr_excel : excel, inout md_model : uml
 			System.out.println("Missing <<ISO8601DateTime>> Stereotype in Destination Model " + dst_model);
 			return;
 		}
-				
-		var rootPackage : uml21.Package = dst_model.getInstances("Model").detect("name", "Model");
+	
+		var rootPackage : uml21.Package = dst_model.getInstances("Model").detect("name", "Data");
+	
+		// obtain the existing Standards package or create a new one if it isn't present
+		var standardsPackage : uml21.Package = rootPackage.getNestedPackage("Standards");
 		
-		var disr_lib = rootPackage.createNestedPackage("DISR Library");
-			
-		disr_lib.applyProfile(magicDrawProfile);
-		disr_lib.applyProfile(updmProfile);
-		disr_lib.applyProfile(updmExtraProfile);
+		if (null == standardsPackage)
+		{
+			standardsPackage = rootPackage.createNestedPackage("Standards");
+		}
+
+		standardsPackage.applyProfile(magicDrawProfile);
+		standardsPackage.applyProfile(updmProfile);
+		standardsPackage.applyProfile(updmExtraProfile);			
 		
-		var standardsPackage : uml21.Package = disr_lib.createNestedPackage("Standards");
-		var datesPackage : uml21.Package = standardsPackage.createNestedPackage("Dates");
+		// obtain the existing Dates package or create a new one if it isn't present
+		var datesPackage : uml21.Package = standardsPackage.getNestedPackage("Dates");
+		
+		if (null == datesPackage)
+		{
+			datesPackage = standardsPackage.createNestedPackage("Dates");
+		}
+
+		datesPackage.applyStereotype(timelineStereo);			
 		
 		// disr_lib.applyStereotype(libraryStereo);
 		// standardsPackage.applyStereotype(libraryStereo);
-		// datesPackage.applyStereotype(libraryStereo);
-		
-		datesPackage.applyStereotype(timelineStereo);		
-		
 		
 		// foreach row of the provided excel file except for the very first row
-		foreach (row : excel.Row in src_model.getInstances("Row").subList(1, src_model.getInstances("Row").size())) {
+		foreach (row : excel.Row in
+			src_model.getInstances("Row").subList(1, src_model.getInstances("Row").size())) {
 			
 			cellList = row.getCells();
 			
 			if (cellList.size() > 1) {
 				
-				var techStd : uml21.Class = dst_model.create("Class");
+				var techStdName : String = cellList[@columnIdByName("Standard Title", src_model)].value;
 				
-				techStd.name = cellList[@columnIdByName("Standard Title", src_model)].value;
+				// obtain the existing TechnicalStandard or create a new one if it isn't present
+				var techStd : uml21.Class = standardsPackage.getOwnedMember(techStdName);
+				var appliedTechStd : EObject;
 				
-				disr_lib.packagedElement.add(techStd);
+				if (null == techStd)
+				{
+					techStd = standardsPackage.createOwnedClass(techStdName, false);
+
+					// apply the <<UPDMElement>>, <<Standard>>, and the <<TechnicalStandard>> stereotypes to the new Class
+					appliedTechStd = @applyAndGetStereoApplication(techStd, techStandardStereo);		
+				}
+				else
+				{
+					appliedTechStd = techStd.getStereotypeApplication(techStandardStereo);
+					appliedTechStd = @applyAndGetStereoApplication(techStd, techStandardStereo);							
+				}
 				
-				// apply the <<Standard>> and the <<TechnicalStandard>> stereotypes to the new Class
-				techStd.applyStereotype(standardStereo);
-				techStd.applyStereotype(techStandardStereo);
-							
-				techStd.setValue(standardStereo, "shortName",
-					cellList[@columnIdByName("Standard Identifier", src_model)].value);
+				@setDynamicObjectStringFeatureByName(appliedTechStd, "shortName",
+					@cellValueAsString(cellList, "Standard Identifier", src_model));
 				
-				techStd.setValue(standardStereo, "InformationTechnologyStandardCategory",
-					[cellList[@columnIdByName("Primary Reviewing TWG", src_model)].value, cellList[@columnIdByName("TWG Secondary Interests", src_model)].value]);
+				@setDynamicObjectStringListFeatureByName(appliedTechStd, "InformationTechnologyStandardCategory",
+					[cellList[@columnIdByName("Primary Reviewing TWG", src_model)].value,
+						cellList[@columnIdByName("TWG Secondary Interests", src_model)].value]);
 					
-				techStd.setValue(standardStereo, "currentStatus",
-					cellList[@columnIdByName("DoD Status", src_model)].value);
+				@setDynamicObjectStringFeatureByName(appliedTechStd, "currentStatus",
+					@cellValueAsString(cellList, "DoD Status", src_model));
+					
+				// if the TechnicalStandard has an existing mandatedDate
+				if (false)
+				{
+					// unset the mandatedDate and remove the existing date from the Dates package
+				}
 					
 				// if there is a DoD Mandated Date then
 				var cellDate : String = cellList[@columnIdByName("Date DoD Mandated", src_model)].value;
 				
-				var isoDate = @createIsoDateTime("DoD Mandate Date for " + techStd.name, cellDate, dst_model);
-				
-				if (null != isoDate)
+				if (null != cellDate)
 				{
-     				datesPackage.packagedElement.add(isoDate);
-     				
-     				isoDate.applyStereotype(isoDateStereo);
-					
-					techStd.setValue(standardStereo, "mandatedDate",
-						isoDate);
+					var isoDate = @createIsoDateTime("DoD Mandate Date for " + techStd.name, cellDate, dst_model);
+				
+					if (null != isoDate)
+					{
+	     				datesPackage.packagedElement.add(isoDate);
+	     				
+	     				@setDynamicObjectFeatureByName(appliedTechStd, "mandatedDate",
+							@applyAndGetStereoApplication(isoDate, isoDateStereo));
+					}
 				}
-						
-				cellDate = 	cellList[@columnIdByName("", src_model)].value;
+					
+				// if the TechnicalStandard has an existing retiredDate
+				if (false)
+				{
+					// unset the retiredDate and remove the existing date from the Dates package
+				}
+					
+				cellDate = cellList[@columnIdByName("Date Retired/Inactive", src_model)].value;
 				
 				if (null != cellDate)
 				{
-     				datesPackage.packagedElement.add(isoDate);
-     				
-     				isoDate.applyStereotype(isoDateStereo);
+					var isoDate = @createIsoDateTime("Retired Date for " + techStd.name, cellDate, dst_model);
 					
-					techStd.setValue(standardStereo, "retiredDate",
-						isoDate);
+					if (null != isoDate)
+					{
+	     				datesPackage.packagedElement.add(isoDate);
+     				
+	     				@setDynamicObjectFeatureByName(appliedTechStd, "retiredDate",
+							@applyAndGetStereoApplication(isoDate, isoDateStereo));
+					}
 				}
 						
-				techStd.setValue(standardStereo, "version",
-					cellList[@columnIdByName("Standard Title", src_model)].value);
+				@setDynamicObjectStringFeatureByName(appliedTechStd, "version",
+					@cellValueAsString(cellList, "Standard Title", src_model));
 				
+				// if the TechnicalStandard has an existing Comment
+				if (false)
+				{
+					// delete that existing Comment
+				}
+					
 				var comment : uml21.Comment = techStd.createOwnedComment();
 				
 				comment.setBody("ABSTRACT:\n" + cellList[@columnIdByName("Abstract", src_model)].value + "\n\nAPPLICABILITY:\n" + cellList[@columnIdByName("Applicability", src_model)].value);
 				
-				techStd.setValue(standardStereo, "URL/URI",
-					cellList[@columnIdByName("URL to Access", src_model)].value);
+				comment.getAnnotatedElements().add(techStd);
+
+				var urlString : String = @cellValueAsString(cellList, "URL to Access", src_model);
 				
+				@setDynamicObjectStringFeatureByName(appliedTechStd, "URL_URI_", 
+					urlString);
+					
+				// if the TechnicalStandard has an existing active hyperlink
+				if (false)
+				{
+					// delete the existing active hyperling
+				}				
+
+				// now create the hyperlink to this URL
+				var hyperlinkStereo = @getStereoByName("HyperlinkOwner", dst_model);
+				
+				var appliedHyperlinkOwner = @applyAndGetStereoApplication(techStd, hyperlinkStereo);
+				
+				@setDynamicObjectStringListFeatureByName(appliedHyperlinkOwner, "hyperlinkText", [urlString]);
+				@setDynamicObjectStringFeatureByName(appliedHyperlinkOwner, "hyperlinkTextActive", urlString);
+					
+				System.out.println("Imported " + techStd.name + " into output model.");
 			}
 		}		
 	}
